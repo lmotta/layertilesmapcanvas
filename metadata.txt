@@ -1,0 +1,26 @@
+[general]
+name:Layer tiles mapcanvas
+description:Create a grid of tiles with mapcanvas extent 
+about:Layer tiles mapcanvas
+
+version:1.0
+qgisMinimumVersion:3.4
+
+author:Luiz Motta
+email:motta.luiz@gmail.com
+
+category:Raster
+
+tags:Tiles,XYZ
+
+homepage:https://github.com/lmotta/test/wiki
+tracker:https://github.com/lmotta/test/issues
+repository:https://github.com/lmotta/test
+
+icon:layertilesmapcanvas.png
+
+experimental:True
+deprecated:False
+
+changelog: 1.0(2019-03-13)
+  Start of plugin
