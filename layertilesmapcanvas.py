@@ -148,36 +148,22 @@ class TilesMapCanvas():
 class TaskDownloadTiles(QgsTask):
     image = pyqtSignal(dict)
     finish = pyqtSignal(dict)
-    progress = pyqtSignal()
-    def __init__(self, name, zoom, infoFeatures, dirPath, hasVrt, slotData, slotFinished):
-        def getMaxWorks():
-            nCpu = multiprocessing.cpu_count()
-            return nCpu if self.totalFeats > nCpu else int( self.totalFeats / 2 ) + 1
-
+    def __init__(self, name, zoom, totalFeatures, iterInfoFeatures, dirPath, hasVrt, slotData, slotFinished):
         super().__init__( self.__class__.__name__, QgsTask.CanCancel )
         self.name = name
         self.zoom = zoom
-        self.infoFeatures = infoFeatures
-        self.totalFeats = len( infoFeatures )
+        self.iterInfoFeatures = iterInfoFeatures
+        self.totalFeats = totalFeatures
         self.countFeats = None
         self.countDownload = None
         self.hasCancel = None
         self.hasVrt = hasVrt
         self.filepathImagesVrt = []
-        self.max_download_workers = getMaxWorks()
-        self.future_to_info = None
         self.dirPath = dirPath
         self.driveTif = gdal.GetDriverByName('GTiff')
         self.wkt3857 = TilesMapCanvas.CRS3857.toWkt()
         self.image.connect( slotData )
         self.finish.connect( slotFinished )
-        self.progress.connect( self.progressDownload )
-
-    @pyqtSlot()
-    def progressDownload(self):
-        self.countFeats += 1
-        value = self.countFeats / self.totalFeats * 100
-        self.setProgress( value )
 
     # Overwrite QgsTask methods
     def run(self):
@@ -200,10 +186,15 @@ class TaskDownloadTiles(QgsTask):
                 ds.SetGeoTransform( args )
                 ds.SetProjection( self.wkt3857 )
 
+            def progressDownload():
+                self.countFeats += 1
+                value = self.countFeats / self.totalFeats * 100
+                self.setProgress( value )
+
             filepath = os.path.join( self.dirPath, f"{info.name}.tif" )
             if os.path.isfile( filepath ):
                 r = getDataSource( filepath )
-                self.progress.emit()
+                progressDownload()
                 if not r['isOk']:
                     self.image.emit( { 'name': info.name, 'message': r['message'] } )
                     return
@@ -222,7 +213,7 @@ class TaskDownloadTiles(QgsTask):
             with urllib.request.urlopen( request) as response:
                 gdal.FileFromMemBuffer( memfile, response.read() )
             self.countDownload += 1
-            self.progress.emit()
+            progressDownload()
             r = getDataSource( memfile)
             if not r['isOk']:
                 gdal.Unlink('memfile')
@@ -241,41 +232,11 @@ class TaskDownloadTiles(QgsTask):
         self.countDownload = 0
         self.hasCancel = False
         self.filepathImagesVrt.clear()
-        args = ( self.max_download_workers, self.__class__.__name__ )
-        with futures.ThreadPoolExecutor( *args ) as e:
-            self.future_to_info = [ e.submit( downloadImage, info ) for info in self.infoFeatures ]
-            futures.wait( self.future_to_info )
+        for info in self.iterInfoFeatures:
+            downloadImage( info )
+            if self.isCanceled():
+                return None
         return True
-
-        # vrt_files = []
-        # c_feat = 0
-        # for info in getInfoFeatures():
-        #     if self.isCanceled():
-        #         self.result = { 'canceled': True, 'total': c_feat }
-        #         return None
-        #     data = { 'name': f"Z={info.z} X={info.x} Y={info.y}" }
-        #     progress = c_feat / self.totalFeats * 100
-        #     self.setProgress( progress )
-        #     r, existsFile = downloadImage( info )
-        #     if not existsFile:
-        #         c_feat += 1
-        #     if not r['isOk']:
-        #         data['message'] = r['message']
-        #         self.image.emit( data )
-        #         continue
-        #     if self.hasVrt:
-        #         vrt_files.append( r['filepath'] )
-        #         continue
-        #     data['filepath'] = r['filepath']
-        #     self.image.emit( data )
-        # self.result = { 'canceled': False, 'total': c_feat }
-        # if self.hasVrt: createVrt( vrt_files, info.z )
-        # return True
-
-    def cancel(self):
-        self.hasCancel = True
-        for future in self.future_to_info:
-            if not future.done() and not future.running(): future.cancel()
 
     @pyqtSlot(bool)
     def finished(self, result=None):
@@ -291,7 +252,7 @@ class TaskDownloadTiles(QgsTask):
         if self.hasVrt:
             createVrt()
             self.filepathImagesVrt.clear()
-        self.finish.emit( { 'canceled': self.hasCancel, 'total': self.countDownload } )
+        self.finish.emit( { 'canceled': self.isCanceled(), 'total': self.countDownload } )
 
 
 class LayerTilesMapCanvas(QObject):
@@ -488,13 +449,11 @@ class LayerTilesMapCanvas(QObject):
 
     @pyqtSlot(str) # download
     def downloadTiles(self, name, dirPath, hasVrt):
-        def getZoom_InfoFeatures(nameTile):
+        def getInfoFeatures(nameTile):
             InfoTile = collections.namedtuple('InfoTile', 'z x y q')
             fields = 'name url width height ulX ulY'
             InfoFeature = collections.namedtuple('InfoFeature', fields )
-            infos = []
             featIterator = self._layer.getFeatures()
-            zoom = next( featIterator )['z']
             featIterator.rewind()
             for feat in featIterator:
                 infoTile = InfoTile( feat['z'], feat['x'], feat['y'], feat['q'] )
@@ -506,9 +465,7 @@ class LayerTilesMapCanvas(QObject):
                     e.width(), e.height(),
                     e.xMinimum(), e.yMaximum()
                 )
-                info = InfoFeature( *args )
-                infos.append( info )
-            return zoom, infos
+                yield InfoFeature( *args )
 
         @pyqtSlot(dict)
         def add(dictFile):
@@ -536,9 +493,11 @@ class LayerTilesMapCanvas(QObject):
             self._createGroupTiles()
         self._removeLayersTile()
         self.finishedTask = False
-        zoom, infoFeatures = getZoom_InfoFeatures( name )
+        zoom = next( self._layer.getFeatures() )['z']
+        iterInfoFeatures = getInfoFeatures( name )
         args = (
-            name, zoom, infoFeatures,
+            name, zoom,
+            self._layer.featureCount(), iterInfoFeatures,
             dirPath, hasVrt,
             add, finished
         )
@@ -549,10 +508,9 @@ class LayerTilesMapCanvas(QObject):
     @pyqtSlot(str) # count_images
     def getTotalImages(self, dirPath):
         def run(task, dirPath):
-            files =  os.listdir( dirPath )
-            images = [ os.path.join( dirPath, fr) for fr in files if fr.endswith('tif') ]
-            total = len( images )
-            del files; del images
+            total = 0
+            for f in os.listdir( dirPath ):
+                if f.endswith('tif'): total += 1
             return { 'canceled': False, 'total': total }
 
         def finished(exception, result=None):
@@ -838,7 +796,6 @@ class LayerTilesMapCanvasWidget(QWidget):
             else:
                 self.rbUpdate.setChecked( True )
             updateProperties( data['name'] )
-
         # btnRemoveFiles
         if data['name'] in ('download', 'count_images', 'remove_images'):
             total = 0
