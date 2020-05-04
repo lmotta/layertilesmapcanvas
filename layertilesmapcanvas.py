@@ -80,6 +80,7 @@ class TilesMapCanvas():
         self.mapCanvas = QgsUtils.iface.mapCanvas()
         self.ct =  QgsCoordinateTransform( self.CRS4326, self.CRS3857, QgsCoordinateTransformContext() )
         self.extentTiles = None
+
     def setExtentTiles(self, zoom):
         def getExtentMapCanvas():
             mapSettings = self.mapCanvas.mapSettings()
@@ -269,6 +270,7 @@ class LayerTilesMapCanvas(QObject):
         self.root = self.project.layerTreeRoot()
         self.nameGroupTiles = 'Tile images'
         self.ltgTiles = self.root.findGroup( self.nameGroupTiles )
+        self._ltl = self.root.findLayer( layer )
         self._zoom = self._getZoom()
         self._tilesCanvas.setExtentTiles( self._zoom )
         self.currentTask = None
@@ -302,6 +304,9 @@ class LayerTilesMapCanvas(QObject):
         if ltgTiles:
             self.project.removeMapLayers( ltgTiles.findLayerIds() )
             self.mapCanvas.refresh()
+
+    @property
+    def visible(self): return self._ltl.isVisible()
 
     @property
     def totalTiles(self): return self._tilesCanvas.total
@@ -719,6 +724,8 @@ class LayerTilesMapCanvasWidget(QWidget):
     def on_changeZoom(self, zoom, totalTiles):
         index = self.cbZoom.findText( str( zoom ) )
         if index == -1:
+            if not self.ltmc.visible:
+                return
             self.msgBar.clearWidgets()
             args = (
                 self.ltmc.__class__.__name__,
