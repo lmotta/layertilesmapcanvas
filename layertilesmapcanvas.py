@@ -16,7 +16,7 @@ http://ecn.t3.tiles.virtualearth.net/tiles/a{q}.jpeg?g=1
 https://docs.microsoft.com/en-us/bingmaps/articles/bing-maps-tile-system
 """
 
-import os, math, functools
+import os, math
 import collections
 import urllib.request, urllib.error
 import multiprocessing
@@ -70,18 +70,16 @@ def getCRS_3857():
     crs.createFromWkt( wkt )
     return crs
 
-
 class TilesMapCanvas():
     MAXSCALEPERPIXEL = 156543.04
     INCHESPERMETER = 39.37
     CRS4326 = QgsCoordinateReferenceSystem('EPSG:4326')
     CRS3857 = getCRS_3857()
-    def __init__(self, fieldNames):
-        self.fieldNames = fieldNames
+    FIELDS = 'x y z q rect'
+    def __init__(self):
         self.mapCanvas = QgsUtils.iface.mapCanvas()
         self.ct =  QgsCoordinateTransform( self.CRS4326, self.CRS3857, QgsCoordinateTransformContext() )
         self.extentTiles = None
-
     def setExtentTiles(self, zoom):
         def getExtentMapCanvas():
             mapSettings = self.mapCanvas.mapSettings()
@@ -137,7 +135,7 @@ class TilesMapCanvas():
                 
             return quadKey
 
-        Tile = collections.namedtuple('Tile', 'x y z q rect')
+        Tile = collections.namedtuple('Tile', self.FIELDS)
         for x in range( self.extentTiles.x1, self.extentTiles.x2+1):
             for y in range( self.extentTiles.y1, self.extentTiles.y2+1):
                 quadKey = getQuadKey( x, y )
@@ -263,7 +261,7 @@ class LayerTilesMapCanvas(QObject):
         super().__init__()
         self._layer = layer
         self._frm_url, self.getUrl = None, None
-        self._tilesCanvas = TilesMapCanvas( list( self.FIELDS.keys() ) )
+        self._tilesCanvas = TilesMapCanvas()
         self.mapCanvas = QgsUtils.iface.mapCanvas()
         self.msgBar = QgsUtils.iface.messageBar()
         self.project = QgsProject.instance()
@@ -305,12 +303,6 @@ class LayerTilesMapCanvas(QObject):
             self.project.removeMapLayers( ltgTiles.findLayerIds() )
             self.mapCanvas.refresh()
 
-    @staticmethod
-    def createLayer():
-        filepath = f"{os.path.splitext(__file__)[0]}.qml"
-        layer = createMemoryLayer('tiles', LayerTilesMapCanvas.FIELDS, 'Polygon', TilesMapCanvas.CRS3857, filepath  )
-        return layer
-
     @property
     def totalTiles(self): return self._tilesCanvas.total
 
@@ -330,10 +322,7 @@ class LayerTilesMapCanvas(QObject):
         self._frm_url = None
         if not bool(value):
             return
-        totalZXY = functools.reduce(
-            lambda a, b: value.find(f"{a}") + value.find(f"{b}"),
-            'zxy'
-        )
+        totalZXY = value.find('z') + value.find('x') + value.find('y')
         if totalZXY < 0:
              self.getUrl = lambda info: value.format( q=info.q )
         else:
@@ -400,14 +389,14 @@ class LayerTilesMapCanvas(QObject):
 
         def run(task, prov, totalTiles):
             c_tiles = 0
-            for feat in self._tilesCanvas( self._zoom ):
+            for tile in self._tilesCanvas( self._zoom ):
                 if task.isCanceled():
                     return { 'canceled': True, 'total': c_tiles }
-                f = QgsFeature()
-                geom = QgsGeometry.fromRect( feat.rect )
-                f.setGeometry( geom )
-                f.setAttributes( [ feat.x, feat.y, feat.z, feat.q ] )
-                prov.addFeature( f )
+                feat = QgsFeature()
+                geom = QgsGeometry.fromRect( tile.rect )
+                feat.setGeometry( geom )
+                feat.setAttributes( [ tile.x, tile.y, tile.z, tile.q ] )
+                prov.addFeature( feat )
                 progress = c_tiles / totalTiles * 100
                 task.setProgress( progress )
                 c_tiles += 1
@@ -979,7 +968,8 @@ class LayerTilesMap(QObject):
             )
             return
 
-        layer = LayerTilesMapCanvas.createLayer()
+        filepath = f"{os.path.splitext(__file__)[0]}.qml"
+        layer = createMemoryLayer('tiles', LayerTilesMapCanvas.FIELDS, 'Polygon', TilesMapCanvas.CRS3857, filepath  )
         ltmc = LayerTilesMapCanvas( layer )
         checkActiveLayer( ltmc )
         ltmc.updateFeatures()
