@@ -79,9 +79,8 @@ class TilesMapCanvas():
     def __init__(self):
         self.mapCanvas = QgsUtils.iface.mapCanvas()
         self.ct =  QgsCoordinateTransform( self.CRS4326, self.CRS3857, QgsCoordinateTransformContext() )
-        self.extentTiles = None
 
-    def setExtentTiles(self, zoom):
+    def _getExtentTiles(self, zoom):
         def getExtentMapCanvas():
             mapSettings = self.mapCanvas.mapSettings()
             crsCanvas = mapSettings.destinationCrs()
@@ -102,12 +101,11 @@ class TilesMapCanvas():
         tile_x1, tile_y1 = deg2num( extent.xMinimum(), extent.yMaximum(), zoom )
         tile_x2, tile_y2 = deg2num( extent.xMaximum(), extent.yMinimum(), zoom )
         ExtentTiles = collections.namedtuple('ExtentTiles', 'x1 y1 x2 y2')
-        self.extentTiles = ExtentTiles( tile_x1, tile_y1, tile_x2, tile_y2 )
+        return ExtentTiles( tile_x1, tile_y1, tile_x2, tile_y2 )        
 
-    @property
-    def total(self):
-        t = self.extentTiles
-        return ( t.x2 - t.x1 + 1 ) * ( t.y2 - t.y1 + 1 )
+    def total(self, zoom):
+        e = self._getExtentTiles( zoom )
+        return ( e.x2 - e.x1 + 1 ) * ( e.y2 - e.y1 + 1 )
 
     def __call__(self, zoom):
         def num2deg(xtile, ytile):
@@ -137,8 +135,9 @@ class TilesMapCanvas():
             return quadKey
 
         Tile = collections.namedtuple('Tile', self.FIELDS)
-        for x in range( self.extentTiles.x1, self.extentTiles.x2+1):
-            for y in range( self.extentTiles.y1, self.extentTiles.y2+1):
+        e = self._getExtentTiles( zoom )
+        for x in range( e.x1, e.x2+1):
+            for y in range( e.y1, e.y2+1):
                 quadKey = getQuadKey( x, y )
                 tile = Tile( x, y, zoom, quadKey, getRectTile( x, y ) ) # EPSG 3857
                 yield tile
@@ -272,7 +271,6 @@ class LayerTilesMapCanvas(QObject):
         self.ltgTiles = self.root.findGroup( self.nameGroupTiles )
         self._ltl = self.root.findLayer( layer )
         self._zoom = self._getZoom()
-        self._tilesCanvas.setExtentTiles( self._zoom )
         self.currentTask = None
         self.msgRunnigTak = 'It is running process'
         self._connect()
@@ -309,15 +307,10 @@ class LayerTilesMapCanvas(QObject):
     def visible(self): return self._ltl.isVisible()
 
     @property
-    def totalTiles(self): return self._tilesCanvas.total
-
-    @property
     def zoom(self): return self._zoom
 
     @zoom.setter
-    def zoom(self, value):
-        self._zoom = value
-        self._tilesCanvas.setExtentTiles( value )
+    def zoom(self, value): self._zoom = value
 
     @property
     def format_url(self): return self._frm_url
@@ -360,12 +353,14 @@ class LayerTilesMapCanvas(QObject):
     def setCustomProperty(self, key, value ):
         self._layer.setCustomProperty(key, value )
 
+    def getTotalTiles(self): return self._tilesCanvas.total( self._zoom  )
+
     @pyqtSlot(float)
     def on_scaleChanged(self, scale_):
         zoom = self._getZoom()
         if self._zoom != zoom:
-            self.zoom = zoom # self._tilesCanvas.setExtentTiles
-            self.changeZoom.emit( zoom, self.totalTiles )
+            self._zoom = zoom
+            self.changeZoom.emit( zoom, self._tilesCanvas.total( zoom ) )
 
     @pyqtSlot(str)
     def on_layerWillBeRemoved(self, layerId):
@@ -392,7 +387,8 @@ class LayerTilesMapCanvas(QObject):
                 value = f"{sq}{value}{sq}"
             self._layer.addExpressionField( value, field )
 
-        def run(task, prov, totalTiles):
+        def run(task, prov):
+            totalTiles = self.getTotalTiles()
             c_tiles = 0
             for tile in self._tilesCanvas( self._zoom ):
                 if task.isCanceled():
@@ -434,7 +430,6 @@ class LayerTilesMapCanvas(QObject):
             'description': f"{self.__class__.__name__}.populate",
             'function': run,
             'prov': prov,
-            'totalTiles': self.totalTiles,
             'on_finished': finished
         }
         self.currentTask = QgsTask.fromFunction( **args )
@@ -700,7 +695,7 @@ class LayerTilesMapCanvasWidget(QWidget):
         index = items.cbZoom.findText( str( self.ltmc.zoom ) )
         if index > -1:
             items.cbZoom.setCurrentIndex( index )
-            items.lblTiles.setText(f"{self.ltmc.totalTiles} Tiles")
+            items.lblTiles.setText(f"{self.ltmc. getTotalTiles()} Tiles")
         #
         items.rbUpdate.setChecked( True )
         items.ckVrt.setChecked( False )
@@ -736,7 +731,7 @@ class LayerTilesMapCanvasWidget(QWidget):
             self.msgBar.pushMessage( *args )
             return
         self.cbZoom.setCurrentIndex( index )
-        self.lblTiles.setText(f"{self.ltmc.totalTiles} Tiles")
+        self.lblTiles.setText(f"{totalTiles} Tiles")
 
     @pyqtSlot(dict)
     def on_finishProcess(self, data):
@@ -873,7 +868,7 @@ class LayerTilesMapCanvasWidget(QWidget):
     def on_currentTextChanged(self, text):
         zoom = int( text )
         self.ltmc.zoom = zoom
-        self.lblTiles.setText(f"{self.ltmc.totalTiles} Tiles")
+        self.lblTiles.setText(f"{self.ltmc.getTotalTiles()} Tiles")
 
     @pyqtSlot(str)
     def on_fileChanged(self, dirPath):
