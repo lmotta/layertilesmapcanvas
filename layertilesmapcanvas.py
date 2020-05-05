@@ -12,7 +12,6 @@ Source from 'https://gist.github.com/maptiler'
 
 See:
 BING
-http://ecn.t3.tiles.virtualearth.net/tiles/a{q}.jpeg?g=1
 https://docs.microsoft.com/en-us/bingmaps/articles/bing-maps-tile-system
 """
 
@@ -21,6 +20,7 @@ import collections
 import urllib.request, urllib.error
 import multiprocessing
 from concurrent import futures
+from functools import partial
 
 from osgeo import gdal
 gdal.UseExceptions()
@@ -70,6 +70,40 @@ def getCRS_3857():
     crs.createFromWkt( wkt )
     return crs
 
+
+def getResponseValue(url, timeout=None):
+    ValueResponse = collections.namedtuple('ValueResponse', 'value error')
+    try:
+        args = {
+            'url': url,
+            'headers': { 'User-agent': 'QGIS Plugin' }
+        }
+        request = urllib.request.Request( **args )
+        args = { 'url': request }
+        if not timeout is None:
+            args['timeout'] = timeout
+        response = urllib.request.urlopen( **args )
+    except ValueError as e:
+        r = ValueResponse( None, None, str( e )  )
+        response = None
+        return r
+    except urllib.error.HTTPError as e:
+        msg =  str( e )
+        content_type = e.headers.get_content_type().split('/')
+        if content_type[0] == 'text' and content_type[1] != 'html':
+            msg = e.read().decode("utf-8")
+        r = ValueResponse( None, msg )
+        response = None
+        return r
+    except urllib.error.URLError as e:
+        r = ValueResponse( None, None, str( e )  )
+        response = None
+        return r
+    r = ValueResponse( response.read(), None )
+    response.close()
+    return r
+
+
 class TilesMapCanvas():
     MAXSCALEPERPIXEL = 156543.04
     INCHESPERMETER = 39.37
@@ -79,6 +113,25 @@ class TilesMapCanvas():
     def __init__(self):
         self.mapCanvas = QgsUtils.iface.mapCanvas()
         self.ct =  QgsCoordinateTransform( self.CRS4326, self.CRS3857, QgsCoordinateTransformContext() )
+
+    def _deg2num(self, vlong, vlat, zoom):
+        lat_rad = math.radians(vlat)
+        n = 2.0 ** zoom
+        xtile = int((vlong + 180.0) / 360.0 * n)
+        ytile = int((1.0 - math.asinh(math.tan(lat_rad)) / math.pi) / 2.0 * n)
+        return ( xtile, ytile )
+
+    def _getQuadKey(self, zoom, xtile, ytile):
+        quadKey = ""
+        for i in range( zoom, 0, -1):
+            digit = 0
+            mask = 1 << (i-1)
+            if (xtile & mask) != 0:
+                digit += 1
+            if (ytile & mask) != 0:
+                digit += 2
+            quadKey += str( digit )
+        return quadKey
 
     def _getExtentTiles(self, zoom):
         def getExtentMapCanvas():
@@ -90,18 +143,23 @@ class TilesMapCanvas():
                 return ct.transform( extent )
             return extent
 
-        def deg2num(vlong, vlat, zoom):
-            lat_rad = math.radians(vlat)
-            n = 2.0 ** zoom
-            xtile = int((vlong + 180.0) / 360.0 * n)
-            ytile = int((1.0 - math.asinh(math.tan(lat_rad)) / math.pi) / 2.0 * n)
-            return (xtile, ytile)
-
         extent = getExtentMapCanvas() # EPSG 4326
-        tile_x1, tile_y1 = deg2num( extent.xMinimum(), extent.yMaximum(), zoom )
-        tile_x2, tile_y2 = deg2num( extent.xMaximum(), extent.yMinimum(), zoom )
+        tile_x1, tile_y1 = self._deg2num( extent.xMinimum(), extent.yMaximum(), zoom )
+        tile_x2, tile_y2 = self._deg2num( extent.xMaximum(), extent.yMinimum(), zoom )
         ExtentTiles = collections.namedtuple('ExtentTiles', 'x1 y1 x2 y2')
         return ExtentTiles( tile_x1, tile_y1, tile_x2, tile_y2 )        
+
+    def getTileCenter(self, zoom):
+        mapSettings = self.mapCanvas.mapSettings()
+        crsCanvas = mapSettings.destinationCrs()
+        center = self.mapCanvas.center()
+        if self.CRS4326 != crsCanvas:
+            ct =  QgsCoordinateTransform( crsCanvas, self.CRS4326, QgsCoordinateTransformContext() )
+            center = ct.transform( center )
+        ( xtile, ytile ) = self._deg2num( center.x(), center.y(), zoom )
+        qtile = self._getQuadKey( zoom, xtile, ytile )
+        Tile = collections.namedtuple('Tile', self.FIELDS )
+        return Tile( xtile, ytile, zoom, qtile, None )
 
     def total(self, zoom):
         e = self._getExtentTiles( zoom )
@@ -121,24 +179,11 @@ class TilesMapCanvas():
             rect = QgsRectangle( xMin, yMin, xMax, yMax )
             return self.ct.transform( rect )
 
-        def getQuadKey(tileX, tileY):
-            quadKey = ""
-            for i in range( zoom, 0, -1):
-                digit = 0
-                mask = 1 << (i-1)
-                if (tileX & mask) != 0:
-                    digit += 1
-                if (tileY & mask) != 0:
-                    digit += 2
-                quadKey += str( digit )
-                
-            return quadKey
-
-        Tile = collections.namedtuple('Tile', self.FIELDS)
+        Tile = collections.namedtuple('Tile', self.FIELDS )
         e = self._getExtentTiles( zoom )
         for x in range( e.x1, e.x2+1):
             for y in range( e.y1, e.y2+1):
-                quadKey = getQuadKey( x, y )
+                quadKey = self._getQuadKey( zoom, x, y )
                 tile = Tile( x, y, zoom, quadKey, getRectTile( x, y ) ) # EPSG 3857
                 yield tile
 
@@ -189,10 +234,10 @@ class TaskDownloadTiles(QgsTask):
                 value = self.countFeats / self.totalFeats * 100
                 self.setProgress( value )
 
+            progressDownload()
             filepath = os.path.join( self.dirPath, f"{info.name}.tif" )
             if os.path.isfile( filepath ):
                 r = getDataSource( filepath )
-                progressDownload()
                 if not r['isOk']:
                     self.image.emit( { 'name': info.name, 'message': r['message'] } )
                     return
@@ -203,19 +248,18 @@ class TaskDownloadTiles(QgsTask):
                     self.image.emit( { 'name': info.name, 'filepath': filepath } )
                 return
             memfile = '/vsimem/temp'
-            args = {
-                'url': info.url,
-                'headers': { 'User-agent': 'QGIS Plugin' }
-            }
-            request = urllib.request.Request( **args )
-            with urllib.request.urlopen( request) as response:
-                gdal.FileFromMemBuffer( memfile, response.read() )
-            self.countDownload += 1
-            progressDownload()
+            rv = getResponseValue( info.url )
+            if rv.value is None:
+                msg = f"{rv.error} {info.url}"
+                self.image.emit( { 'name': info.name, 'message': msg } )
+                return
+            gdal.FileFromMemBuffer( memfile, rv.value )
             r = getDataSource( memfile)
             if not r['isOk']:
                 gdal.Unlink('memfile')
-                self.image.emit( { 'name': info.name, 'message':r['message'] } )
+                self.image.emit( { 'name': info.name, 'message': r['message'] } )
+                return
+            self.countDownload += 1
             ds = self.driveTif.CreateCopy( filepath, r['ds'] )
             r['ds'] = None
             gdal.Unlink( 'memfile')
@@ -257,22 +301,21 @@ class LayerTilesMapCanvas(QObject):
     FIELDS = { 'x': 'integer', 'y': 'integer', 'z': 'integer', 'q': 'string(-1)' }
     changeZoom = pyqtSignal( int, int )
     finishProcess = pyqtSignal(dict) # { 'name', 'canceled', 'error', 'total' }
+    messageLogError = pyqtSignal(str)
     def __init__(self, layer ):
         super().__init__()
         self._layer = layer
         self._frm_url, self.getUrl = None, None
         self._tilesCanvas = TilesMapCanvas()
         self.mapCanvas = QgsUtils.iface.mapCanvas()
-        self.msgBar = QgsUtils.iface.messageBar()
         self.project = QgsProject.instance()
         self.taskManager = QgsApplication.taskManager()
+        self._currentTask = None
         self.root = self.project.layerTreeRoot()
-        self.nameGroupTiles = 'Tile images'
-        self.ltgTiles = self.root.findGroup( self.nameGroupTiles )
+        self._nameGroupTiles = 'Tile images'
+        self._ltgTiles = self.root.findGroup( self._nameGroupTiles )
         self._ltl = self.root.findLayer( layer )
         self._zoom = self._getZoom()
-        self.currentTask = None
-        self.msgRunnigTak = 'It is running process'
         self._connect()
 
     def _getZoom(self):
@@ -294,11 +337,11 @@ class LayerTilesMapCanvas(QObject):
         for f in ss: f.disconnect( ss[ f ] )
 
     def _createGroupTiles(self):
-        self.ltgTiles = self.root.addGroup( self.nameGroupTiles )
-        self.ltgTiles.setItemVisibilityChecked( False )
+        self._ltgTiles = self.root.addGroup( self._nameGroupTiles )
+        self._ltgTiles.setItemVisibilityChecked( False )
 
     def _removeLayersTile(self):
-        ltgTiles = self.root.findGroup( self.nameGroupTiles )
+        ltgTiles = self.root.findGroup( self._nameGroupTiles )
         if ltgTiles:
             self.project.removeMapLayers( ltgTiles.findLayerIds() )
             self.mapCanvas.refresh()
@@ -327,21 +370,12 @@ class LayerTilesMapCanvas(QObject):
             self.getUrl = lambda info: value.format(
                 z=info.z, x=info.x, y=info.y
             )
-        Tile = collections.namedtuple('Tile', 'x y z q rect')
-        info = Tile(0, 0, 1, '3', None)
-        try:
-            args = {
-                'url': self.getUrl( info ),
-                'headers': { 'User-agent': 'QGIS Plugin' }
-            }
-            request = urllib.request.Request( **args )
-            _response = urllib.request.urlopen( request, timeout=5 )
-        except ValueError as e:
-            raise Exception( str(e) )
-        except urllib.error.HTTPError as e:
-            raise Exception( str(e) )
-        except urllib.error.URLError as e:
-            raise Exception( str(e) )
+        info = self._tilesCanvas.getTileCenter(3)
+        url = self.getUrl( info )
+        rv = getResponseValue( url, 5 )
+        if rv.value is None:
+            msg = f"{rv.error} {url}"
+            raise Exception( msg )
         self._frm_url = value
 
     def setLayerName(self):
@@ -406,15 +440,15 @@ class LayerTilesMapCanvas(QObject):
         def finished(exception, result=None):
             self._layer.updateExtents()
             self._layer.triggerRepaint()
-            self.currentTask = None
+            self._currentTask = None
             r = { 'name': 'update' }
             if exception:
                 r['error'] = f"Exception, {exception}"
             r.update( result )
             self.finishProcess.emit( r )
 
-        if self.currentTask:
-            self.currentTask.cancel()
+        if self._currentTask:
+            self._currentTask.cancel()
             return
         prov = self._layer.dataProvider()
         prov.truncate() # Delete all
@@ -432,9 +466,9 @@ class LayerTilesMapCanvas(QObject):
             'prov': prov,
             'on_finished': finished
         }
-        self.currentTask = QgsTask.fromFunction( **args )
-        self.currentTask.setDependentLayers( [ self._layer ] )
-        self.taskManager.addTask( self.currentTask )
+        self._currentTask = QgsTask.fromFunction( **args )
+        self._currentTask.setDependentLayers( [ self._layer ] )
+        self.taskManager.addTask( self._currentTask )
 
     @pyqtSlot(str) # download
     def downloadTiles(self, name, dirPath, hasVrt):
@@ -461,24 +495,28 @@ class LayerTilesMapCanvas(QObject):
             """
             dictFile{'name', 'filepath'}
             """
-            if not self.root.findGroup( self.nameGroupTiles ):
+            if 'message' in dictFile:
+                self.messageLogError.emit( dictFile['message'] )
+                return
+
+            if not self.root.findGroup( self._nameGroupTiles ):
                 self._createGroupTiles()
             layer = QgsRasterLayer( dictFile['filepath'], dictFile['name'] )
             self.project.addMapLayer( layer, False )
-            self.ltgTiles.addLayer( layer )
+            self._ltgTiles.addLayer( layer )
 
         @pyqtSlot(dict)
         def finished(result):
-            self.currentTask = None
+            self._currentTask = None
             r = { 'name': 'download' }
             r.update( result )
             self.finishProcess.emit( r )
 
-        if self.currentTask:
-            self.currentTask.cancel()
+        if self._currentTask:
+            self._currentTask.cancel()
             return
 
-        if not self.root.findGroup( self.nameGroupTiles ):
+        if not self.root.findGroup( self._nameGroupTiles ):
             self._createGroupTiles()
         self._removeLayersTile()
         self.finishedTask = False
@@ -490,9 +528,9 @@ class LayerTilesMapCanvas(QObject):
             dirPath, hasVrt,
             add, finished
         )
-        self.currentTask = TaskDownloadTiles( *args )
-        self.currentTask.setDependentLayers( [ self._layer ] )
-        self.taskManager.addTask( self.currentTask )
+        self._currentTask = TaskDownloadTiles( *args )
+        self._currentTask.setDependentLayers( [ self._layer ] )
+        self.taskManager.addTask( self._currentTask )
 
     @pyqtSlot(str) # count_images
     def getTotalImages(self, dirPath):
@@ -503,15 +541,15 @@ class LayerTilesMapCanvas(QObject):
             return { 'canceled': False, 'total': total }
 
         def finished(exception, result=None):
-            self.currentTask = None
+            self._currentTask = None
             r = { 'name': 'count_images' }
             if exception:
                 r['error'] = f"Exception, {exception}"
             r.update( result )
             self.finishProcess.emit( r )
 
-        if self.currentTask:
-            self.currentTask.cancel()
+        if self._currentTask:
+            self._currentTask.cancel()
             return
         # Task
         self.finishedTask = False
@@ -521,8 +559,8 @@ class LayerTilesMapCanvas(QObject):
             'dirPath': dirPath,
             'on_finished': finished
         }
-        self.currentTask = QgsTask.fromFunction( **args )
-        self.taskManager.addTask( self.currentTask )
+        self._currentTask = QgsTask.fromFunction( **args )
+        self.taskManager.addTask( self._currentTask )
 
     @pyqtSlot(str) # remove_images
     def removeImages(self, dirPath):
@@ -547,15 +585,15 @@ class LayerTilesMapCanvas(QObject):
 
         def finished(exception, result=None):
             self._removeLayersTile()
-            self.currentTask = None
+            self._currentTask = None
             r = { 'name': 'remove_images' }
             if exception:
                 r['error'] = f"Exception, {exception}"
             r.update( result )
             self.finishProcess.emit( r )
 
-        if self.currentTask:
-            self.currentTask.cancel()
+        if self._currentTask:
+            self._currentTask.cancel()
             return
         # Task
         self.finishedTask = False
@@ -566,8 +604,8 @@ class LayerTilesMapCanvas(QObject):
             'f_exts': ('tif', 'tif.aux.xml', 'vrt'),
             'on_finished': finished
         }
-        self.currentTask = QgsTask.fromFunction( **args )
-        self.taskManager.addTask( self.currentTask )
+        self._currentTask = QgsTask.fromFunction( **args )
+        self.taskManager.addTask( self._currentTask )
 
 
 class LayerTilesMapCanvasWidget(QWidget):
@@ -707,9 +745,12 @@ class LayerTilesMapCanvasWidget(QWidget):
                 continue
             self.__dict__[ name ] = value
 
+        logMessage = QgsApplication.messageLog().logMessage
+        messageLogError = partial( logMessage, tag='LayerTilesMapCanvas', level=Qgis.Warning )
         # Connections
         self.ltmc.changeZoom.connect( self.on_changeZoom )
         self.ltmc.finishProcess.connect( self.on_finishProcess)
+        self.ltmc.messageLogError.connect( messageLogError )
         self.btnOk.clicked.connect( self.on_clickedOk )
         self.btnRemoveFiles.clicked.connect( self.on_clickedRemoved )
         self.cbZoom.currentTextChanged.connect( self.on_currentTextChanged )
@@ -815,7 +856,7 @@ class LayerTilesMapCanvasWidget(QWidget):
                 try:
                     self.ltmc.format_url = url
                 except Exception as e:
-                    pushMessage( f"URL: {str(e)}" )
+                    pushMessage( str( e ) )
                     return False
                 return True
 
@@ -831,6 +872,16 @@ class LayerTilesMapCanvasWidget(QWidget):
             self.ltmc.updateFeatures()
 
         def download():
+            if not bool( self.ltmc.format_url):
+                args = (
+                    self.ltmc.__class__.__name__,
+                    'Missing tile server URL',
+                    Qgis.Warning, 4
+                )
+                self.msgBar.pushMessage( *args )
+                self.btnOk.setText('OK')
+                self.rbUpdate.setChecked( True )
+                return
             dirPath = self.wgtDir.lineEdit().value()
             if not bool( dirPath ) or not os.path.isdir( dirPath ):
                 args = (
@@ -840,6 +891,8 @@ class LayerTilesMapCanvasWidget(QWidget):
                 )
                 self.msgBar.pushMessage( *args )
                 self.rbDownload.setEnabled( False )
+                self.btnOk.setText('OK')
+                self.rbUpdate.setChecked( True )
                 return
             hasVrt = self.ckVrt.isChecked()
             self.ltmc.downloadTiles( self.name, dirPath, hasVrt )
@@ -873,9 +926,9 @@ class LayerTilesMapCanvasWidget(QWidget):
     @pyqtSlot(str)
     def on_fileChanged(self, dirPath):
         valid = bool( dirPath ) and os.path.isdir( dirPath )
-        self.rbDownload.setEnabled( valid )
         if valid:
             self.ltmc.getTotalImages( dirPath )
+        self.rbDownload.setEnabled( valid )
 
 
 class LayerTilesMapCanvasWidgetProvider(QgsLayerTreeEmbeddedWidgetProvider):
@@ -956,7 +1009,7 @@ class LayerTilesMap(QObject):
             except Exception as e:
                 self.msgBar.pushMessage(
                     self.__class__.__name__ ,
-                    f"'{info.name}', URL: {str(e)}",
+                    f"'{info.name}'. {str(e)}",
                     Qgis.Warning, 4
                 )
                 return
