@@ -291,7 +291,7 @@ class TaskDownloadTiles(QgsTask):
             name = f"{self.name} Z={self.zoom}"
             self.image.emit( { 'name': name, 'filepath': filepath } )
 
-        if self.hasVrt:
+        if self.hasVrt and bool( self.filepathImagesVrt ):
             createVrt()
             self.filepathImagesVrt.clear()
         self.finish.emit( { 'canceled': self.isCanceled(), 'total': self.countDownload } )
@@ -631,7 +631,7 @@ class LayerTilesMapCanvasWidget(QWidget):
                 lblName.setTextFormat( Qt.RichText )
                 lyt.addWidget( lblName )
                 leUrl = QgsFilterLineEdit(self, 'Enter with a url with ..{z}..{x}..{y}')
-                leUrl.setToolTip('Tile server')
+                leUrl.setToolTip( self.tipUrl.format('?') )
                 lyt.addWidget( leUrl )
                 return lyt, lblName, leUrl
 
@@ -703,6 +703,7 @@ class LayerTilesMapCanvasWidget(QWidget):
         self.name = f"tilemap_{registerLayers[self.id_layer]['id']:03d}"
         self.msgBar = QgsUtils.iface.messageBar()
         self.titleRemoveFiles = 'Remove images - {}'
+        self.tipUrl = 'Tile server: {}'
         items = setGui()
         # Name
         html = f'<b style="background-color:LightGray;"><i>{self.name}</i></b>'
@@ -712,6 +713,7 @@ class LayerTilesMapCanvasWidget(QWidget):
         if frm_url:
             self.ltmc.format_url = frm_url
             items.leUrl.setValue( frm_url )
+            items.leUrl.setToolTip( self.tipUrl.format( frm_url ) )
             self.ltmc.setLayerName()
         else:
             items.leUrl.setValue( None )
@@ -849,23 +851,27 @@ class LayerTilesMapCanvasWidget(QWidget):
                         Qgis.Warning, 8
                     )
                     self.msgBar.pushMessage( *args )
-
+                
                 if not bool( url ):
                     self.ltmc.format_url = url
+                    self.leUrl.setToolTip( self.tipUrl.format('?') )
                     return False
                 try:
                     self.ltmc.format_url = url
                 except Exception as e:
                     pushMessage( str( e ) )
+                    self.leUrl.setToolTip( self.tipUrl.format('?') )
                     return False
+                self.leUrl.setToolTip( self.tipUrl.format( url ) )
                 return True
 
             zoom = int( self.cbZoom.currentText() )
             self.ltmc.zoom = zoom
-            enabled = True
+            enabledUrl = True
             url = self.leUrl.value().replace('\n','')
+            if self.ltmc.format_url != url:
+                enabledUrl = checkUrl()
             dirPath = self.wgtDir.lineEdit().value()
-            enabledUrl = checkUrl() # Set self.ltmc.format_url
             enabledDir = bool( dirPath ) and os.path.isdir( dirPath )
             enabled =  enabledUrl and enabledDir
             self.rbDownload.setEnabled( enabled )
