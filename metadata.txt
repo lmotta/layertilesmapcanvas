@@ -1,6 +1,6 @@
 [general]
 name:'Layer tiles mapcanvas'
-description:Create a layer with grid of tiles from extent and zoom of mapcanvas
+description:Create a layer with grid of tiles from extent and zoom of map canvas
 about:This plugin create a layer with grid of tiles from extent and zoom of map canvas.
   The goal of plugin is checking a XYZ tiles server, showing the grid of tiles 
   for the extent and zoom of current map canvas.
