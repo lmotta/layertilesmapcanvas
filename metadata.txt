@@ -1,26 +1,30 @@
 [general]
-name:Layer tiles mapcanvas
-description:Create layer with grid of tiles from extent and zoom of mapcanvas
-about:Layer tiles mapcanvas
+name:'Layer tiles mapcanvas'
+description:Create a layer with grid of tiles from extent and zoom of mapcanvas
+about:This plugin create a layer with grid of tiles from extent and zoom of map canvas.
+  The goal of plugin is checking a XYZ tiles server, showing the grid of tiles 
+  for the extent and zoom of current map canvas.
+  The plugin can used for download the image tiles.
+  * See if server license permit the download.
 
 version:1.0
-qgisMinimumVersion:3.4
+qgisMinimumVersion:3.10
 
 author:Luiz Motta
 email:motta.luiz@gmail.com
 
 category:Raster
 
-tags:Tiles,XYZ
+tags:Tiles,XYZ,TMS
 
-homepage:https://github.com/lmotta/test/wiki
-tracker:https://github.com/lmotta/test/issues
-repository:https://github.com/lmotta/test
+homepage:https://github.com/lmotta/layertilesmapcanvas/wiki
+tracker:https://github.com/lmotta/layertilesmapcanvas/issues
+repository:https://github.com/lmotta/layertilesmapcanvas
 
 icon:layertilesmapcanvas.png
 
 experimental:False
 deprecated:False
 
-changelog: 1.0(2019-03-13)
+changelog: 1.0(2020-05-01)
   Start of plugin

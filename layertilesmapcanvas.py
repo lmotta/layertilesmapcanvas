@@ -2,7 +2,7 @@
 """
 /***************************************************************************
 Name                 : Layer tiles mapcanvas
-Description          : Create layer with grid of tiles from extent and zoom of mapcanvas.
+Description          : Create a layer with grid of tiles from extent and zoom of map canvas.
 Date                 : May, 2020
 copyright            : (C) 2020 by Luiz Motta
 email                : motta.luiz@gmail.com
@@ -20,7 +20,7 @@ email                : motta.luiz@gmail.com
 """
 
 __author__ = 'Luiz Motta'
-__date__ = '2020-05-01'
+__date__ = 'c'
 __copyright__ = '(C) 2020, Luiz Motta'
 __revision__ = '$Format:%H$'
 
