@@ -54,8 +54,8 @@ class LayerTilesMapcanvasPlugin(QObject):
         self.action.setStatusTip( about )
         self.action.triggered.connect( self.run )
 
-        self.iface.addRasterToolBarIcon( self.action )
-        self.iface.addPluginToRasterMenu( self.namePlugin, self.action )
+        self.iface.addWebToolBarIcon( self.action )
+        self.iface.addPluginToWebMenu( self.namePlugin, self.action )
         self.ltm.register()
 
     def unload(self):

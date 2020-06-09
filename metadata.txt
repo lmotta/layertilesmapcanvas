@@ -1,5 +1,5 @@
 [general]
-name:'Layer tiles mapcanvas'
+name:Layer tiles mapcanvas
 description:Create a layer with grid of tiles from extent and zoom of map canvas
 about:This plugin create a layer with grid of tiles from extent and zoom of map canvas.
   The goal of plugin is checking a XYZ tiles server, showing the grid of tiles 
@@ -13,7 +13,7 @@ qgisMinimumVersion:3.10
 author:Luiz Motta
 email:motta.luiz@gmail.com
 
-category:Raster
+category:Web
 
 tags:Tiles,XYZ,TMS
 
