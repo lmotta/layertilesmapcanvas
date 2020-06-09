@@ -1,19 +1,30 @@
 # -*- coding: utf-8 -*-
 """
-Adaptation:
-Sources from 'https://wiki.openstreetmap.org/wiki/Slippy_map_tilenames'
-- deg2num
-- num2deg
-Source from 'https://gis.stackexchange.com/questions/268890/get-current-zoom-level-from-qgis-map-canvas'
-- getZoom
+/***************************************************************************
+Name                 : Layer tiles mapcanvas
+Description          : Create layer with grid of tiles from extent and zoom of mapcanvas.
+Date                 : May, 2020
+copyright            : (C) 2020 by Luiz Motta
+email                : motta.luiz@gmail.com
 
-Source from 'https://gist.github.com/maptiler' 
-- getQuadKey
+ ***************************************************************************/
 
-See:
-BING
-https://docs.microsoft.com/en-us/bingmaps/articles/bing-maps-tile-system
+/***************************************************************************
+ *                                                                         *
+ *   This program is free software; you can redistribute it and/or modify  *
+ *   it under the terms of the GNU General Public License as published by  *
+ *   the Free Software Foundation; either version 2 of the License, or     *
+ *   (at your option) any later version.                                   *
+ *                                                                         *
+ ***************************************************************************/
 """
+
+__author__ = 'Luiz Motta'
+__date__ = '2020-05-01'
+__copyright__ = '(C) 2020, Luiz Motta'
+__revision__ = '$Format:%H$'
+
+
 
 import os, math
 import collections
@@ -115,6 +126,7 @@ class TilesMapCanvas():
         self.ct =  QgsCoordinateTransform( self.CRS4326, self.CRS3857, QgsCoordinateTransformContext() )
 
     def _deg2num(self, vlong, vlat, zoom):
+        # Adaptation from 'https://wiki.openstreetmap.org/wiki/Slippy_map_tilenames'
         lat_rad = math.radians(vlat)
         n = 2.0 ** zoom
         xtile = int((vlong + 180.0) / 360.0 * n)
@@ -122,6 +134,7 @@ class TilesMapCanvas():
         return ( xtile, ytile )
 
     def _getQuadKey(self, zoom, xtile, ytile):
+        # Adaptation from 'https://gist.github.com/maptiler' 
         quadKey = ""
         for i in range( zoom, 0, -1):
             digit = 0
@@ -167,6 +180,7 @@ class TilesMapCanvas():
 
     def __call__(self, zoom):
         def num2deg(xtile, ytile):
+            # Adaptation from 'https://wiki.openstreetmap.org/wiki/Slippy_map_tilenames'
             n = 2.0 ** zoom
             vlong = xtile / n * 360.0 - 180.0
             lat_rad = math.atan(math.sinh(math.pi * (1 - 2 * ytile / n)))
@@ -319,6 +333,7 @@ class LayerTilesMapCanvas(QObject):
         self._connect()
 
     def _getZoom(self):
+        # Adaptation from 'https://gis.stackexchange.com/questions/268890/get-current-zoom-level-from-qgis-map-canvas'
         dpi = QgsUtils.iface.mainWindow().physicalDpiX()
         scale = QgsUtils.iface.mapCanvas().scale()
         f =  dpi / scale
@@ -684,7 +699,7 @@ class LayerTilesMapCanvasWidget(QWidget):
             lyt.addLayout( lytUrl )
             lyt.addWidget( tabs  )
             self.setLayout( lyt )
-            # Create ItemsGui only these names
+            # ItemsGui will be used outside
             names = (
                 'cbZoom', 'lblTiles',
                 'lblName', 'leUrl',

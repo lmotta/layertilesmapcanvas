@@ -1,6 +1,6 @@
 [general]
 name:Layer tiles mapcanvas
-description:Create a grid of tiles with mapcanvas extent 
+description:Create layer with grid of tiles from extent and zoom of mapcanvas
 about:Layer tiles mapcanvas
 
 version:1.0
@@ -19,7 +19,7 @@ repository:https://github.com/lmotta/test
 
 icon:layertilesmapcanvas.png
 
-experimental:True
+experimental:False
 deprecated:False
 
 changelog: 1.0(2019-03-13)

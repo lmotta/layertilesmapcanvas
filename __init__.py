@@ -2,9 +2,9 @@
 """
 /***************************************************************************
 Name                 : Layer tiles mapcanvas
-Description          : Create a grid of tiles with mapcanvas extent 
+Description          : Create layer with grid of tiles from extent and zoom of mapcanvas.
 Date                 : May, 2020
-copyright            : (C) 2012 by Luiz Motta
+copyright            : (C) 2020 by Luiz Motta
 email                : motta.luiz@gmail.com
 
  ***************************************************************************/
