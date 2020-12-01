@@ -95,7 +95,7 @@ def getResponseValue(url, timeout=None):
             args['timeout'] = timeout
         response = urllib.request.urlopen( **args )
     except ValueError as e:
-        r = ValueResponse( None, None, str( e )  )
+        r = ValueResponse( None, str( e )  )
         response = None
         return r
     except urllib.error.HTTPError as e:
@@ -107,7 +107,7 @@ def getResponseValue(url, timeout=None):
         response = None
         return r
     except urllib.error.URLError as e:
-        r = ValueResponse( None, None, str( e )  )
+        r = ValueResponse( None, str( e )  )
         response = None
         return r
     r = ValueResponse( response.read(), None )
@@ -268,15 +268,15 @@ class TaskDownloadTiles(QgsTask):
                 self.image.emit( { 'name': info.name, 'message': msg } )
                 return
             gdal.FileFromMemBuffer( memfile, rv.value )
-            r = getDataSource( memfile)
+            r = getDataSource( memfile )
             if not r['isOk']:
-                gdal.Unlink('memfile')
+                gdal.Unlink(memfile)
                 self.image.emit( { 'name': info.name, 'message': r['message'] } )
                 return
             self.countDownload += 1
             ds = self.driveTif.CreateCopy( filepath, r['ds'] )
             r['ds'] = None
-            gdal.Unlink( 'memfile')
+            gdal.Unlink( memfile )
             setGeoreference( ds )
             ds = None
             if self.hasVrt:
