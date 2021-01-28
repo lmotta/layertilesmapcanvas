@@ -285,8 +285,7 @@ class TaskDownloadTiles(QgsTask):
         InfoTile = collections.namedtuple('InfoTile', 'z x y q')
         fields = 'name url width height ulX ulY'
         InfoFeature = collections.namedtuple('InfoFeature', fields )
-        featIterator = self.layer.getFeatures()
-        featIterator.rewind()
+        featIterator = self.layer.getSelectedFeatures()
         for feat in featIterator:
             infoTile = InfoTile( feat['z'], feat['x'], feat['y'], feat['q'] )
             name = f"{self.name}_{infoTile.z}_{infoTile.x}_{infoTile.y}"
@@ -295,7 +294,6 @@ class TaskDownloadTiles(QgsTask):
             downloadImage( InfoFeature( name, url, e.width(), e.height(), e.xMinimum(), e.yMaximum() ) )
             if self.isCanceled():
                 return None
-        featIterator.rewind()
         return True
 
     @pyqtSlot(bool)
@@ -308,7 +306,8 @@ class TaskDownloadTiles(QgsTask):
 
 class LayerTilesMapCanvas(QObject):
     FIELDS = { 'x': 'integer', 'y': 'integer', 'z': 'integer', 'q': 'string(-1)' }
-    changeZoom = pyqtSignal( int, int )
+    selectedFeatures = pyqtSignal(int)
+    changeZoom = pyqtSignal(int, int)
     finishProcess = pyqtSignal(dict) # { 'name', 'canceled', 'error', 'total' }
     messageLogError = pyqtSignal(str)
     def __init__(self, layer ):
@@ -339,7 +338,8 @@ class LayerTilesMapCanvas(QObject):
     def _connect(self, connect=True):
         ss = {
             self.mapCanvas.scaleChanged: self.on_scaleChanged,
-            self.project.layerWillBeRemoved: self.on_layerWillBeRemoved
+            self.project.layerWillBeRemoved: self.on_layerWillBeRemoved,
+            self._layer.selectionChanged : self.on_selectionChanged
         }
         if connect:
             for f in ss: f.connect( ss[ f ] )
@@ -411,6 +411,10 @@ class LayerTilesMapCanvas(QObject):
         if self._layer.id() == layerId:
             self._connect( False )
             self._layer, self._tilesCanvas = 2 * [ None ]
+
+    @pyqtSlot('QgsFeatureIds', 'QgsFeatureIds', bool)
+    def on_selectionChanged(self, selected, deselected, clearAndSelect):
+        self.selectedFeatures.emit( len( selected ) )
 
     # Emit finishProcess
     @pyqtSlot() # update
@@ -662,7 +666,7 @@ class LayerTilesMapCanvasWidget(QWidget):
                 lytRadios = QVBoxLayout()
                 rbUpdate = QRadioButton('Update', self )
                 lytRadios.addWidget( rbUpdate )
-                rbDownload = QRadioButton('Download', self )
+                rbDownload = QRadioButton('Download(0 selected)', self )
                 lytRadios.addWidget( rbDownload )
                 lyt1.addLayout( lytRadios )
                 lytOk = QVBoxLayout()
@@ -771,6 +775,7 @@ class LayerTilesMapCanvasWidget(QWidget):
         logMessage = QgsApplication.messageLog().logMessage
         messageLogError = partial( logMessage, tag='LayerTilesMapCanvas', level=Qgis.Warning )
         # Connections
+        self.ltmc.selectedFeatures.connect( self.on_selectedFeatures )
         self.ltmc.changeZoom.connect( self.on_changeZoom )
         self.ltmc.finishProcess.connect( self.on_finishProcess)
         self.ltmc.messageLogError.connect( messageLogError )
@@ -779,6 +784,10 @@ class LayerTilesMapCanvasWidget(QWidget):
         self.cbZoom.currentTextChanged.connect( self.on_currentTextChanged )
         self.wgtDir.fileChanged.connect( self.on_fileChanged )
 
+    @pyqtSlot(int)
+    def on_selectedFeatures(self, total):
+        self.rbDownload.setText( f"Download ({total} selected)" )
+    
     @pyqtSlot(int, int)
     def on_changeZoom(self, zoom, totalTiles):
         index = self.cbZoom.findText( str( zoom ) )
@@ -899,15 +908,21 @@ class LayerTilesMapCanvasWidget(QWidget):
             self.ltmc.updateFeatures()
 
         def download():
-            if not bool( self.ltmc.format_url):
+            def messageGui(message):
                 args = (
                     self.ltmc.__class__.__name__,
-                    'Missing tile server URL',
+                    message,
                     Qgis.Warning, 4
                 )
                 self.msgBar.pushMessage( *args )
                 self.btnOk.setText('OK')
                 self.rbUpdate.setChecked( True )
+
+            if not bool( self.ltmc.format_url):
+                messageGui('Missing tile server URL')
+                return
+            if not bool( self.ltmc._layer.selectedFeatureCount() ):
+                messageGui('Missing selected features')
                 return
             dirPath = self.wgtDir.lineEdit().value()
             if not bool( dirPath ) or not os.path.isdir( dirPath ):
