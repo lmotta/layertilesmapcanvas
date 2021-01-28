@@ -203,23 +203,22 @@ class TilesMapCanvas():
 
 
 class TaskDownloadTiles(QgsTask):
-    image = pyqtSignal(dict)
+    imageError = pyqtSignal(dict)
     finish = pyqtSignal(dict)
-    def __init__(self, name, zoom, totalFeatures, iterInfoFeatures, dirPath, hasVrt, slotData, slotFinished):
+    def __init__(self, name, layer, getUrl, dirPath, slotImageError, slotFinished):
         super().__init__( self.__class__.__name__, QgsTask.CanCancel )
         self.name = name
-        self.zoom = zoom
-        self.iterInfoFeatures = iterInfoFeatures
-        self.totalFeats = totalFeatures
+        self.layer = layer
+        self.getUrl = getUrl
+        self.totalFeats = layer.featureCount()
         self.countFeats = None
         self.countDownload = None
         self.hasCancel = None
-        self.hasVrt = hasVrt
-        self.filepathImagesVrt = []
+        self.filepathImages = []
         self.dirPath = dirPath
         self.driveTif = gdal.GetDriverByName('GTiff')
         self.wkt3857 = TilesMapCanvas.CRS3857.toWkt()
-        self.image.connect( slotData )
+        self.imageError.connect( slotImageError )
         self.finish.connect( slotFinished )
 
     # Overwrite QgsTask methods
@@ -253,25 +252,22 @@ class TaskDownloadTiles(QgsTask):
             if os.path.isfile( filepath ):
                 r = getDataSource( filepath )
                 if not r['isOk']:
-                    self.image.emit( { 'name': info.name, 'message': r['message'] } )
+                    self.imageError.emit( { 'name': info.name, 'message': r['message'] } )
                     return
                 r['ds'] = None
-                if self.hasVrt:
-                    self.filepathImagesVrt.append( filepath )
-                else:
-                    self.image.emit( { 'name': info.name, 'filepath': filepath } )
+                self.filepathImages.append( filepath )
                 return
             memfile = '/vsimem/temp'
             rv = getResponseValue( info.url )
             if rv.value is None:
                 msg = f"{rv.error} {info.url}"
-                self.image.emit( { 'name': info.name, 'message': msg } )
+                self.imageError.emit( { 'name': info.name, 'message': msg } )
                 return
             gdal.FileFromMemBuffer( memfile, rv.value )
             r = getDataSource( memfile )
             if not r['isOk']:
                 gdal.Unlink(memfile)
-                self.image.emit( { 'name': info.name, 'message': r['message'] } )
+                self.imageError.emit( { 'name': info.name, 'message': r['message'] } )
                 return
             self.countDownload += 1
             ds = self.driveTif.CreateCopy( filepath, r['ds'] )
@@ -279,36 +275,35 @@ class TaskDownloadTiles(QgsTask):
             gdal.Unlink( memfile )
             setGeoreference( ds )
             ds = None
-            if self.hasVrt:
-                self.filepathImagesVrt.append( filepath )
-            else:
-                self.image.emit( { 'name': info.name, 'filepath': filepath } )
+            self.filepathImages.append( filepath )
 
         self.countFeats = 0
         self.countDownload = 0
         self.hasCancel = False
-        self.filepathImagesVrt.clear()
-        for info in self.iterInfoFeatures:
-            downloadImage( info )
+        self.filepathImages.clear()
+        # Iterator
+        InfoTile = collections.namedtuple('InfoTile', 'z x y q')
+        fields = 'name url width height ulX ulY'
+        InfoFeature = collections.namedtuple('InfoFeature', fields )
+        featIterator = self.layer.getFeatures()
+        featIterator.rewind()
+        for feat in featIterator:
+            infoTile = InfoTile( feat['z'], feat['x'], feat['y'], feat['q'] )
+            name = f"{self.name}_{infoTile.z}_{infoTile.x}_{infoTile.y}"
+            url = self.getUrl( infoTile )
+            e = feat.geometry().boundingBox()
+            downloadImage( InfoFeature( name, url, e.width(), e.height(), e.xMinimum(), e.yMaximum() ) )
             if self.isCanceled():
                 return None
+        featIterator.rewind()
         return True
 
     @pyqtSlot(bool)
     def finished(self, result=None):
-        def createVrt():
-            options = gdal.BuildVRTOptions( resampleAlg=gdal.GRIORA_NearestNeighbour )
-            vrt = f"{self.name}_{self.zoom}.vrt"
-            filepath = os.path.join( self.dirPath, vrt )
-            _ds = gdal.BuildVRT( filepath, self.filepathImagesVrt, options=options )
-            _ds = None
-            name = f"{self.name} Z={self.zoom}"
-            self.image.emit( { 'name': name, 'filepath': filepath } )
-
-        if self.hasVrt and bool( self.filepathImagesVrt ):
-            createVrt()
-            self.filepathImagesVrt.clear()
-        self.finish.emit( { 'canceled': self.isCanceled(), 'total': self.countDownload } )
+        dicEmit =  { 'canceled': self.isCanceled(), 'total': self.countDownload }
+        if ( result == None and not self.isCanceled() ):
+            dicEmit['message'] = "See log message"
+        self.finish.emit( dicEmit )
 
 
 class LayerTilesMapCanvas(QObject):
@@ -487,65 +482,76 @@ class LayerTilesMapCanvas(QObject):
 
     @pyqtSlot(str) # download
     def downloadTiles(self, name, dirPath, hasVrt):
-        def getInfoFeatures(nameTile):
-            InfoTile = collections.namedtuple('InfoTile', 'z x y q')
-            fields = 'name url width height ulX ulY'
-            InfoFeature = collections.namedtuple('InfoFeature', fields )
-            featIterator = self._layer.getFeatures()
-            featIterator.rewind()
-            for feat in featIterator:
-                infoTile = InfoTile( feat['z'], feat['x'], feat['y'], feat['q'] )
-                name = f"{nameTile}_{infoTile.z}_{infoTile.x}_{infoTile.y}"
-                url = self.getUrl( infoTile )
-                e = feat.geometry().boundingBox()
-                args = (
-                    name, url,
-                    e.width(), e.height(),
-                    e.xMinimum(), e.yMaximum()
-                )
-                yield InfoFeature( *args )
+        @pyqtSlot(dict)
+        def imageError(dictError):
+            """
+            dictError{'name', 'message'}
+            """
+            self.messageLogError.emit( dictError['message'] )
 
         @pyqtSlot(dict)
-        def add(dictFile):
-            """
-            dictFile{'name', 'filepath'}
-            """
-            if 'message' in dictFile:
-                self.messageLogError.emit( dictFile['message'] )
+        def finished(result):
+            def emit():
+                self._currentTask.filepathImages.clear()
+                self._currentTask = None
+                r = { 'name': 'download' }
+                r.update( result )
+                self.finishProcess.emit( r )
+
+            def getName(filepath):
+                name = os.path.basename( filepath )
+                name = os.path.splitext( name)[0]
+                return name
+
+            def createVrt():
+                options = gdal.BuildVRTOptions( resampleAlg=gdal.GRIORA_NearestNeighbour )
+                vrt = f"{self._downloadName}_{self._zoom}.vrt"
+                filepath = os.path.join( dirPath, vrt )
+                _ds = gdal.BuildVRT( filepath, self._currentTask.filepathImages, options=options )
+                _ds = None
+                layer = QgsRasterLayer( filepath, getName( filepath ) )
+                self.project.addMapLayer( layer )
+
+            if result['canceled']:
+                emit()
+                return
+            if not bool( self._currentTask.filepathImages ):
+                emit()
+                return
+
+            if hasVrt:
+                createVrt()
+                emit()
                 return
 
             if not self.root.findGroup( self._nameGroupTiles ):
                 self._createGroupTiles()
-            layer = QgsRasterLayer( dictFile['filepath'], dictFile['name'] )
-            self.project.addMapLayer( layer, False )
-            self._ltgTiles.addLayer( layer )
+            for filepath in self._currentTask.filepathImages:
+                layer = QgsRasterLayer( filepath, getName( filepath ) )
+                self.project.addMapLayer( layer, False )
+                self._ltgTiles.addLayer( layer )
 
-        @pyqtSlot(dict)
-        def finished(result):
-            self._currentTask = None
-            r = { 'name': 'download' }
-            r.update( result )
-            self.finishProcess.emit( r )
+            emit()
 
         if self._currentTask:
             self._currentTask.cancel()
             return
 
-        if not self.root.findGroup( self._nameGroupTiles ):
-            self._createGroupTiles()
+        self._downloadName = name
         self._removeLayersTile()
         self.finishedTask = False
-        zoom = next( self._layer.getFeatures() )['z']
-        iterInfoFeatures = getInfoFeatures( name )
         args = (
-            name, zoom,
-            self._layer.featureCount(), iterInfoFeatures,
-            dirPath, hasVrt,
-            add, finished
+            name, self._layer, self.getUrl,
+            dirPath,
+            imageError, finished
         )
         self._currentTask = TaskDownloadTiles( *args )
         self._currentTask.setDependentLayers( [ self._layer ] )
         self.taskManager.addTask( self._currentTask )
+        # Debug
+        #self._currentTask.run()
+        #self._currentTask.finished( True )
+
 
     @pyqtSlot(str) # count_images
     def getTotalImages(self, dirPath):
