@@ -452,6 +452,7 @@ class LayerTilesMapCanvas(QObject):
             return { 'canceled': False, 'total': c_tiles }
 
         def finished(exception, result=None):
+            self.selectedFeatures.emit(0)
             self._layer.updateExtents()
             self._layer.triggerRepaint()
             self._currentTask = None
@@ -485,7 +486,7 @@ class LayerTilesMapCanvas(QObject):
         self.taskManager.addTask( self._currentTask )
 
     @pyqtSlot(str) # download
-    def downloadTiles(self, name, dirPath, hasVrt):
+    def downloadTiles(self, name, dirPath, hasVrt, hasAddTiles):
         @pyqtSlot(dict)
         def imageError(dictError):
             """
@@ -513,8 +514,9 @@ class LayerTilesMapCanvas(QObject):
                 filepath = os.path.join( dirPath, vrt )
                 _ds = gdal.BuildVRT( filepath, self._currentTask.filepathImages, options=options )
                 _ds = None
-                layer = QgsRasterLayer( filepath, getName( filepath ) )
-                self.project.addMapLayer( layer )
+                if hasAddTiles:
+                    layer = QgsRasterLayer( filepath, getName( filepath ) )
+                    self.project.addMapLayer( layer )
 
             if result['canceled']:
                 emit()
@@ -528,12 +530,13 @@ class LayerTilesMapCanvas(QObject):
                 emit()
                 return
 
-            if not self.root.findGroup( self._nameGroupTiles ):
-                self._createGroupTiles()
-            for filepath in self._currentTask.filepathImages:
-                layer = QgsRasterLayer( filepath, getName( filepath ) )
-                self.project.addMapLayer( layer, False )
-                self._ltgTiles.addLayer( layer )
+            if hasAddTiles:
+                if not self.root.findGroup( self._nameGroupTiles ):
+                    self._createGroupTiles()
+                for filepath in self._currentTask.filepathImages:
+                    layer = QgsRasterLayer( filepath, getName( filepath ) )
+                    self.project.addMapLayer( layer, False )
+                    self._ltgTiles.addLayer( layer )
 
             emit()
 
@@ -662,19 +665,21 @@ class LayerTilesMapCanvasWidget(QWidget):
 
             def createTabs():
                 # Tab1
-                lyt1 = QHBoxLayout()
-                lytRadios = QVBoxLayout()
+                lyt1 = QVBoxLayout()
+                lytOk = QHBoxLayout()
                 rbUpdate = QRadioButton('Update', self )
-                lytRadios.addWidget( rbUpdate )
+                lytOk.addWidget( rbUpdate )
                 rbDownload = QRadioButton('Download(0 selected)', self )
-                lytRadios.addWidget( rbDownload )
-                lyt1.addLayout( lytRadios )
-                lytOk = QVBoxLayout()
+                lytOk.addWidget( rbDownload )
                 btnOk = QPushButton( 'OK', self )
                 lytOk.addWidget( btnOk )
-                ckVrt = QCheckBox('Create VRT image', self )
-                lytOk.addWidget( ckVrt )
                 lyt1.addLayout( lytOk )
+                lytChecks = QHBoxLayout()
+                ckVrt = QCheckBox('Create VRT tiles', self )
+                lytChecks.addWidget( ckVrt )
+                ckAddTiles = QCheckBox('Add tiles', self )
+                lytChecks.addWidget( ckAddTiles )
+                lyt1.addLayout( lytChecks )
                 tab1 = QWidget()
                 tab1.setLayout( lyt1 )
                 # Tab 2
@@ -693,7 +698,7 @@ class LayerTilesMapCanvasWidget(QWidget):
                 return (
                     tabs,
                     rbUpdate, rbDownload, btnOk,
-                    ckVrt, wgtDir, btnRemoveFiles
+                    ckVrt, ckAddTiles, wgtDir, btnRemoveFiles
                 )
 
             lytZoom, cbZoom, lblTiles = createLayoutZoom()
@@ -701,7 +706,7 @@ class LayerTilesMapCanvasWidget(QWidget):
             (
                 tabs,
                 rbUpdate, rbDownload, btnOk,
-                ckVrt, wgtDir, btnRemoveFiles
+                ckVrt, ckAddTiles, wgtDir, btnRemoveFiles
             ) = createTabs()
             # Layout
             lyt = QVBoxLayout()
@@ -714,7 +719,7 @@ class LayerTilesMapCanvasWidget(QWidget):
                 'cbZoom', 'lblTiles',
                 'lblName', 'leUrl',
                 'rbUpdate', 'rbDownload', 'btnOk',
-                'ckVrt', 'wgtDir', 'btnRemoveFiles'
+                'ckVrt', 'ckAddTiles', 'wgtDir', 'btnRemoveFiles'
             )
             l_objs = locals()
             objs = tuple( l_objs[ name ] for name  in names )
@@ -764,6 +769,7 @@ class LayerTilesMapCanvasWidget(QWidget):
         #
         items.rbUpdate.setChecked( True )
         items.ckVrt.setChecked( False )
+        items.ckAddTiles.setChecked( False )
         # Create self variables from items
         for idx in range( len( items._fields ) ):
             name = items._fields[ idx ]
@@ -937,7 +943,8 @@ class LayerTilesMapCanvasWidget(QWidget):
                 self.rbUpdate.setChecked( True )
                 return
             hasVrt = self.ckVrt.isChecked()
-            self.ltmc.downloadTiles( self.name, dirPath, hasVrt )
+            hasAddTiles = self.ckAddTiles.isChecked()
+            self.ltmc.downloadTiles( self.name, dirPath, hasVrt, hasAddTiles )
         
         self.btnOk.setText('CANCEL')
         process = { True: update, False: download }
