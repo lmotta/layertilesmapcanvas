@@ -46,7 +46,8 @@ from qgis.PyQt.QtWidgets import (
     QLabel, QLineEdit,
     QTabWidget, QRadioButton, QCheckBox,
     QComboBox,
-    QVBoxLayout, QHBoxLayout
+    QVBoxLayout, QHBoxLayout,
+    QMessageBox
 )
 
 from qgis.core import (
@@ -309,6 +310,7 @@ class LayerTilesMapCanvas(QObject):
     def __init__(self, layer ):
         super().__init__()
         self._layer = layer
+        self.totalAddTiles = 100
         self._frm_url, self.getUrl = None, None
         self._tilesCanvas = TilesMapCanvas()
         self.mapCanvas = QgsUtils.iface.mapCanvas()
@@ -504,10 +506,23 @@ class LayerTilesMapCanvas(QObject):
                 vrt = f"{self._downloadName}_{self._zoom}.vrt"
                 filepath = os.path.join( dirPath, vrt )
                 _ds = gdal.BuildVRT( filepath, self._currentTask.filepathImages, options=options )
+                _ds.FlushCache()
                 _ds = None
                 if hasAddTiles:
                     layer = QgsRasterLayer( filepath, getName( filepath ) )
                     self.project.addMapLayer( layer )
+
+            def confirmAddTiles(total):
+                arg = (
+                    QgsUtils.iface.mainWindow(),
+                    'Add selected tiles',
+                    f"Do you really want add {total} tiles in Map?",
+                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.No
+                )
+                reply = QMessageBox.question( *arg )
+                return reply == QMessageBox.Yes
+
 
             if result['canceled']:
                 emit()
@@ -522,6 +537,10 @@ class LayerTilesMapCanvas(QObject):
                 return
 
             if hasAddTiles:
+                total = self._layer.selectedFeatureCount()
+                if total > self.totalAddTiles and not confirmAddTiles( total ):
+                    emit()
+                    return
                 if not self.root.findGroup( self._nameGroupTiles ):
                     self._createGroupTiles()
                 for filepath in self._currentTask.filepathImages:
