@@ -7,7 +7,7 @@ about:This plugin create a layer with grid of tiles from extent and zoom of map 
   The plugin can used for download the image tiles.
   * See if server license permit the download.
 
-version:1.1
+version:1.2
 qgisMinimumVersion:3.10
 
 author:Luiz Motta
@@ -26,7 +26,9 @@ icon:layertilesmapcanvas.png
 experimental:False
 deprecated:False
 
-changelog: 1.1(2020-11-30)
+changelog: 1.2(2021-01-29)
+  Download selected tiles
+  - 1.1(2020-11-30)
   Fixed download(Thanks George)
   - 1.0(2020-05-01)
   Start of plugin
