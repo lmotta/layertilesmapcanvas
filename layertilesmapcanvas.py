@@ -203,17 +203,16 @@ class TilesMapCanvas():
 
 
 class TaskDownloadTiles(QgsTask):
-    imageError = pyqtSignal(dict)
+    imageError = pyqtSignal(str)
     finish = pyqtSignal(dict)
     def __init__(self, name, layer, getUrl, dirPath, slotImageError, slotFinished):
         super().__init__( self.__class__.__name__, QgsTask.CanCancel )
         self.name = name
         self.layer = layer
         self.getUrl = getUrl
-        self.totalFeats = layer.featureCount()
+        self.totalFeats = layer.selectedFeatureCount()
         self.countFeats = None
         self.countDownload = None
-        self.hasCancel = None
         self.filepathImages = []
         self.dirPath = dirPath
         self.driveTif = gdal.GetDriverByName('GTiff')
@@ -252,7 +251,7 @@ class TaskDownloadTiles(QgsTask):
             if os.path.isfile( filepath ):
                 r = getDataSource( filepath )
                 if not r['isOk']:
-                    self.imageError.emit( { 'name': info.name, 'message': r['message'] } )
+                    self.imageError.emit(f"{name} - {r['message']}")
                     return
                 r['ds'] = None
                 self.filepathImages.append( filepath )
@@ -261,13 +260,13 @@ class TaskDownloadTiles(QgsTask):
             rv = getResponseValue( info.url )
             if rv.value is None:
                 msg = f"{rv.error} {info.url}"
-                self.imageError.emit( { 'name': info.name, 'message': msg } )
+                self.imageError.emit(f"{name} - {r['message']}")
                 return
             gdal.FileFromMemBuffer( memfile, rv.value )
             r = getDataSource( memfile )
             if not r['isOk']:
                 gdal.Unlink(memfile)
-                self.imageError.emit( { 'name': info.name, 'message': r['message'] } )
+                self.imageError.emit(f"{name} - {r['message']}")
                 return
             self.countDownload += 1
             ds = self.driveTif.CreateCopy( filepath, r['ds'] )
@@ -279,7 +278,6 @@ class TaskDownloadTiles(QgsTask):
 
         self.countFeats = 0
         self.countDownload = 0
-        self.hasCancel = False
         self.filepathImages.clear()
         # Iterator
         InfoTile = collections.namedtuple('InfoTile', 'z x y q')
@@ -293,14 +291,12 @@ class TaskDownloadTiles(QgsTask):
             e = feat.geometry().boundingBox()
             downloadImage( InfoFeature( name, url, e.width(), e.height(), e.xMinimum(), e.yMaximum() ) )
             if self.isCanceled():
-                return None
+                return False
         return True
 
     @pyqtSlot(bool)
-    def finished(self, result=None):
-        dicEmit =  { 'canceled': self.isCanceled(), 'total': self.countDownload }
-        if ( result == None and not self.isCanceled() ):
-            dicEmit['message'] = "See log message"
+    def finished(self, result):
+        dicEmit =  { 'canceled': not result, 'total': self.countDownload }
         self.finish.emit( dicEmit )
 
 
@@ -399,6 +395,8 @@ class LayerTilesMapCanvas(QObject):
 
     def getTotalTiles(self): return self._tilesCanvas.total( self._zoom  )
 
+    def getTotalSelectedTiles(self): return self._layer.selectedFeatureCount()
+
     @pyqtSlot(float)
     def on_scaleChanged(self, scale_):
         zoom = self._getZoom()
@@ -488,13 +486,6 @@ class LayerTilesMapCanvas(QObject):
     @pyqtSlot(str) # download
     def downloadTiles(self, name, dirPath, hasVrt, hasAddTiles):
         @pyqtSlot(dict)
-        def imageError(dictError):
-            """
-            dictError{'name', 'message'}
-            """
-            self.messageLogError.emit( dictError['message'] )
-
-        @pyqtSlot(dict)
         def finished(result):
             def emit():
                 self._currentTask.filepathImages.clear()
@@ -550,14 +541,13 @@ class LayerTilesMapCanvas(QObject):
         args = (
             name, self._layer, self.getUrl,
             dirPath,
-            imageError, finished
+            self.messageLogError.emit, finished
         )
         self._currentTask = TaskDownloadTiles( *args )
         self._currentTask.setDependentLayers( [ self._layer ] )
         self.taskManager.addTask( self._currentTask )
         # Debug
-        #self._currentTask.run()
-        #self._currentTask.finished( True )
+        # self._currentTask.finished( self._currentTask.run() )
 
 
     @pyqtSlot(str) # count_images
@@ -914,7 +904,7 @@ class LayerTilesMapCanvasWidget(QWidget):
             self.ltmc.updateFeatures()
 
         def download():
-            def messageGui(message):
+            def messageGuiWarning(message):
                 args = (
                     self.ltmc.__class__.__name__,
                     message,
@@ -924,11 +914,20 @@ class LayerTilesMapCanvasWidget(QWidget):
                 self.btnOk.setText('OK')
                 self.rbUpdate.setChecked( True )
 
+            def messageGuiInfo(message):
+                args = (
+                    self.ltmc.__class__.__name__,
+                    message,
+                    Qgis.Info, 4
+                )
+                self.msgBar.pushMessage( *args )
+
             if not bool( self.ltmc.format_url):
-                messageGui('Missing tile server URL')
+                messageGuiWarning('Missing tile server URL')
                 return
-            if not bool( self.ltmc._layer.selectedFeatureCount() ):
-                messageGui('Missing selected features')
+            totalSelected = self.ltmc.getTotalSelectedTiles()
+            if not bool( totalSelected ):
+                messageGuiWarning('Missing selected features')
                 return
             dirPath = self.wgtDir.lineEdit().value()
             if not bool( dirPath ) or not os.path.isdir( dirPath ):
@@ -944,6 +943,7 @@ class LayerTilesMapCanvasWidget(QWidget):
                 return
             hasVrt = self.ckVrt.isChecked()
             hasAddTiles = self.ckAddTiles.isChecked()
+            messageGuiInfo( f"Download Tiles - {self.name} - Zoom {self.ltmc.zoom} - {totalSelected} selected tiles" )
             self.ltmc.downloadTiles( self.name, dirPath, hasVrt, hasAddTiles )
         
         self.btnOk.setText('CANCEL')
