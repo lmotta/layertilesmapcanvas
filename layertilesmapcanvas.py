@@ -261,7 +261,7 @@ class TaskDownloadTiles(QgsTask):
             rv = getResponseValue( info.url )
             if rv.value is None:
                 msg = f"{rv.error} {info.url}"
-                self.imageError.emit(f"{name} - {r['message']}")
+                self.imageError.emit(f"{name} - {rv['message']}")
                 return
             gdal.FileFromMemBuffer( memfile, rv.value )
             r = getDataSource( memfile )

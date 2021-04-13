@@ -59,8 +59,8 @@ class LayerTilesMapcanvasPlugin(QObject):
         self.ltm.register()
 
     def unload(self):
-        self.iface.removeRasterToolBarIcon( self.action )
-        self.iface.removePluginRasterMenu( self.namePlugin, self.action )
+        self.iface.removeWebToolBarIcon( self.action )
+        self.iface.removePluginWebMenu( self.namePlugin, self.action )
         del self.action
 
     @pyqtSlot(bool)
