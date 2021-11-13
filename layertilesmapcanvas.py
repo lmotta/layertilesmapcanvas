@@ -657,7 +657,11 @@ class LayerTilesMapCanvasWidget(QWidget):
                 _lbl = QLabel('Zoom:', self)
                 lyt.addWidget( _lbl )
                 cbZoom = QComboBox( self )
-                cbZoom.addItems( [ str(n) for n in range(5, 19) ] )
+                zmin = self.registerLayers[ self.id_layer ][ self.KEYPROPERTY_MIN ]
+                zmin = 5 if zmin is None else int( zmin )
+                zmax = self.registerLayers[ self.id_layer ][ self.KEYPROPERTY_MAX ]
+                zmax = 25 if zmax is None else int( zmax )
+                cbZoom.addItems( [ str(n) for n in range(zmin, zmax+1) ] )
                 lyt.addWidget( cbZoom )
                 lblTiles = QLabel('', self )
                 lyt.addWidget( lblTiles )
@@ -1006,10 +1010,7 @@ class LayerTilesMapCanvasWidgetProvider(QgsLayerTreeEmbeddedWidgetProvider):
     def __init__(self):
         super().__init__()
         self.layers = {} # Register properties of layer
-        self.keys = (
-            LayerTilesMapCanvasWidget.KEYPROPERTY_URL,
-            LayerTilesMapCanvasWidget.KEYPROPERTY_DIR,
-        )
+        self.keys = [ LayerTilesMapCanvasWidget.__dict__[ item ] for item in dir( LayerTilesMapCanvasWidget ) if item.find('KEYPROPERTY') == 0 ]
         self.numRegister = 0
 
     def id(self):
@@ -1057,37 +1058,62 @@ class LayerTilesMap(QObject):
 
     def run(self):
         def checkActiveLayer(ltmc):
-            def getUrl():
-                Info = collections.namedtuple('Info', 'url name')
+            def getInfoUrl():
+                def getValueZ(url, id1, id2):
+                    lenZ = 6 # &zmin=
+                    if id2 == -1:
+                        return url[id1+lenZ:]
+                    else:
+                        if id1 < id2:
+                            return url[id1+lenZ:id2]
+                        return url[id1+lenZ:]
+
+                Info = collections.namedtuple('Info', 'name url zmin zmax')
+                infoUrl = Info(None, None, None, None)
+
                 layer = self.activeLayer()
                 if not bool(layer):
-                    return Info(None, None)
+                    return infoUrl
 
                 if layer is None or layer.providerType() != 'wms':
-                    return Info(None, None)
+                    return infoUrl
 
                 source = urllib.parse.unquote( layer.source() )
                 if source.find('type=xyz') == -1:
-                    return Info(None, None)
+                    return infoUrl
 
+                infoUrl = infoUrl._replace( name=layer.name() )
                 iniUrl = source.find('url=') + 4
                 url = source[iniUrl:]
 
                 iniZmin = url.find('&zmin')
                 iniZmax = url.find('&zmax')
                 if ( iniZmin  + iniZmax ) == -2: # None zmin, zmax (QGIS)
-                    return Info( url, layer.name() )
+                    infoUrl = infoUrl._replace( url=url )
+                    return infoUrl
 
                 if iniZmin == -1:
-                    return Info( url[:iniZmax], layer.name() )
+                    infoUrl = infoUrl._replace( url=url[:iniZmax] )
 
                 if iniZmax == -1:
-                    return Info( url[:iniZmin], layer.name() )
+                    infoUrl = infoUrl._replace( url=url[:iniZmin] )
+                
+                if not iniZmin == -1 and not iniZmax == -1:
+                    endUrl = iniZmin if iniZmin < iniZmax else iniZmax
+                    infoUrl = infoUrl._replace( url=url[:endUrl] )
 
-                endUrl = iniZmin if iniZmin < iniZmax else iniZmax
-                return Info( url[:endUrl], layer.name() )
+                # Zmin and Zmax
+                if not iniZmin == -1:
+                    value = getValueZ( url, iniZmin, iniZmax )
+                    infoUrl = infoUrl._replace( zmin=value )
 
-            info = getUrl()
+                if not iniZmax == -1:
+                    value = getValueZ( url, iniZmax, iniZmin )
+                    infoUrl = infoUrl._replace( zmax=value )
+                    
+                return infoUrl
+
+            info = getInfoUrl()
             if not bool( info.url ):
                 ltmc.format_url = None
                 return
@@ -1101,6 +1127,10 @@ class LayerTilesMap(QObject):
                 )
                 return
             layer.setCustomProperty( LayerTilesMapCanvasWidget.KEYPROPERTY_URL, info.url )
+            if not info.zmin is None:
+                layer.setCustomProperty( LayerTilesMapCanvasWidget.KEYPROPERTY_MIN, info.zmin )
+            if not info.zmax is None:
+                layer.setCustomProperty( LayerTilesMapCanvasWidget.KEYPROPERTY_MAX, info.zmax )
             
         if self.project.count() == 0:
             self.msgBar.pushMessage(
