@@ -647,6 +647,8 @@ class LayerTilesMapCanvas(QObject):
 
 class LayerTilesMapCanvasWidget(QWidget):
     KEYPROPERTY_URL = 'LayerTilesMapCanvas/url'
+    KEYPROPERTY_MIN = 'LayerTilesMapCanvas/min'
+    KEYPROPERTY_MAX = 'LayerTilesMapCanvas/max'
     KEYPROPERTY_DIR = 'LayerTilesMapCanvas/dir_tiles'
     def __init__(self, layer, registerLayers):
         def setGui():
@@ -710,6 +712,7 @@ class LayerTilesMapCanvasWidget(QWidget):
                     ckVrt, ckAddTiles, wgtDir, btnRemoveFiles
                 )
 
+            
             lytZoom, cbZoom, lblTiles = createLayoutZoom()
             lytUrl, lblName, leUrl = createLayoutUrl()
             (
@@ -1059,14 +1062,30 @@ class LayerTilesMap(QObject):
                 layer = self.activeLayer()
                 if not bool(layer):
                     return Info(None, None)
+
                 if layer is None or layer.providerType() != 'wms':
                     return Info(None, None)
+
                 source = urllib.parse.unquote( layer.source() )
                 if source.find('type=xyz') == -1:
                     return Info(None, None)
-                idIni= source.find('url=') + 4
-                idEnd = source.find('&zmax')
-                return Info( source[idIni:idEnd], layer.name() )
+
+                iniUrl = source.find('url=') + 4
+                url = source[iniUrl:]
+
+                iniZmin = url.find('&zmin')
+                iniZmax = url.find('&zmax')
+                if ( iniZmin  + iniZmax ) == -2: # None zmin, zmax (QGIS)
+                    return Info( url, layer.name() )
+
+                if iniZmin == -1:
+                    return Info( url[:iniZmax], layer.name() )
+
+                if iniZmax == -1:
+                    return Info( url[:iniZmin], layer.name() )
+
+                endUrl = iniZmin if iniZmin < iniZmax else iniZmax
+                return Info( url[:endUrl], layer.name() )
 
             info = getUrl()
             if not bool( info.url ):
